@@ -1,256 +1,383 @@
-import React, { useState, useContext } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Alert,
+  Button,
+  ActivityIndicator
+} from 'react-native';
+
 import { useNavigation } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { AuthContext } from '../context/AuthContext';
+import { MaterialIcons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 
 export default function HomeScreen() {
+
   const navigation = useNavigation();
-  const { userData } = useContext(AuthContext);
-  const [permission, requestPermission] = useCameraPermissions();
-  const [scannedData, setScannedData] = useState(null);
-  const [isScanning, setIsScanning] = useState(true);
-  const [isCheckedIn, setIsCheckedIn] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const BASE_URL = "http://10.1.12.186/api/presensi";
+  const [permission, requestPermission] =
+    useCameraPermissions();
 
-  if (!permission) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.infoText}>Memuat perizinan kamera...</Text>
-      </View>
-    );
-  }
+  const [isScanning, setIsScanning] =
+    useState(true);
 
-  if (!permission.granted) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.infoText}>
-          Aplikasi butuh akses kamera untuk memindai QR Code Presensi Dosen!
-        </Text>
-        <TouchableOpacity style={styles.buttonRequest} onPress={requestPermission}>
-          <Text style={styles.buttonText}>Aktifkan Kamera</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
+  const [locationStatus, setLocationStatus] =
+    useState('checking');
 
-  const handleBarCodeScanned = ({ type, data }) => {
-    if (!isScanning || isSubmitting) return;
-    setIsScanning(false);
+  const [distance, setDistance] =
+    useState(0);
 
-    try {
-      const qrData = JSON.parse(data);
-      setScannedData(qrData);
+const KAMPUS_LAT = -6.3480;
+const KAMPUS_LON = 107.1482;
+
+  // TESTING RADIUS
+  const MAKSIMAL_JARAK_METER = 250;
+
+  const BASE_URL =
+    'http://10.1.12.186:8080/api/presensi';
+
+  useEffect(() => {
+
+    if(permission?.granted){
+      verifyLocation();
+    }
+
+  },[permission]);
+
+  const calculateDistance = (
+    lat1,
+    lon1,
+    lat2,
+    lon2
+  ) => {
+
+    const R = 6371e3;
+
+    const φ1 = lat1*Math.PI/180;
+    const φ2 = lat2*Math.PI/180;
+
+    const Δφ =
+      (lat2-lat1)*Math.PI/180;
+
+    const Δλ =
+      (lon2-lon1)*Math.PI/180;
+
+    const a =
+      Math.sin(Δφ/2)**2 +
+      Math.cos(φ1)*
+      Math.cos(φ2)*
+      Math.sin(Δλ/2)**2;
+
+    const c =
+      2*
+      Math.atan2(
+        Math.sqrt(a),
+        Math.sqrt(1-a)
+      );
+
+    return R*c;
+  };
+
+  const verifyLocation = async() => {
+
+    setLocationStatus('checking');
+
+    try{
+
+      const { status } =
+        await Location.requestForegroundPermissionsAsync();
+
+      if(status!=='granted'){
+
+        Alert.alert(
+          'Akses Ditolak',
+          'GPS wajib diaktifkan.'
+        );
+
+        setLocationStatus('error');
+        return;
+      }
+
+      const currentLocation =
+        await Location.getCurrentPositionAsync({
+          accuracy:
+            Location.Accuracy.BestForNavigation
+        });
+
+      const myLat =
+        currentLocation.coords.latitude;
+
+      const myLon =
+        currentLocation.coords.longitude;
+
+      console.log("MY LAT:",myLat);
+      console.log("MY LON:",myLon);
+
+      const jarakMeter =
+        calculateDistance(
+          myLat,
+          myLon,
+          KAMPUS_LAT,
+          KAMPUS_LON
+        );
+
+      setDistance(
+        Math.round(jarakMeter)
+      );
+
+      if(
+        jarakMeter <=
+        MAKSIMAL_JARAK_METER
+      ){
+        setLocationStatus('valid');
+      }
+      else{
+        setLocationStatus('invalid');
+      }
+
+    }
+    catch(error){
+
+      console.log(error);
 
       Alert.alert(
-        "QR Code Terdeteksi",
-        `Mata Kuliah: ${qrData.kodeMk}\nPertemuan: ${qrData.pertemuanKe}\nRuangan: ${qrData.ruangan}\n\nLanjutkan Presensi (Check-In)?`,
-        [
-          {
-            text: "Batal",
-            onPress: () => {
-              setIsScanning(true);
-              setScannedData(null);
-            },
-            style: "cancel"
-          },
-          {
-            text: "Ya, Check In",
-            onPress: () => handleSubmitPresensi(qrData)
-          }
-        ]
+        'GPS Error',
+        'Gagal membaca lokasi.'
       );
-    } catch (error) {
-      Alert.alert("QR Tidak Valid", "Pastikan Anda memindai QR Code Presensi Dosen.");
-      setIsScanning(true);
+
+      setLocationStatus('error');
     }
   };
 
-  const handleSubmitPresensi = async (qrData) => {
-    if (isSubmitting) return;
-    setIsSubmitting(true);
+  const handleBarCodeScanned =
+    ({data}) => {
 
-    const payload = {
-      kodeMk: qrData.kodeMk,
-      course: qrData.course,
-      nimMhs: userData?.mhsNim,
-      pertemuanKe: qrData.pertemuanKe,
-      date: new Date().toISOString().split('T')[0],
-      jamPresensi: new Date().toLocaleTimeString('en-GB'),
-      status: "Present",
-      ruangan: qrData.ruangan
-    };
+    if(!isScanning) return;
 
-    try {
-      const response = await fetch(BASE_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+    setIsScanning(false);
 
-      const result = await response.json();
-
-      if (response.ok) {
-        setIsCheckedIn(true);
-        Alert.alert(
-          "Berhasil!",
-          "Presensi sukses dicatat ke Database.",
-          [
-            {
-              text: "Lihat Riwayat",
-              onPress: () => {
-                setIsSubmitting(false);
-                setIsScanning(true);
-                setScannedData(null);
-                navigation.navigate('HistoryTab', { screen: 'HistoryList' });
-              }
-            }
-          ]
-        );
-        return;
-      } else {
-        Alert.alert("Gagal", result.message || "Terjadi kesalahan di server.");
-      }
-    } catch (error) {
-      Alert.alert("Error Jaringan", "Pastikan IP Laptop benar dan API berjalan.");
-      console.error(error);
-    } finally {
-      setIsSubmitting(false);
-      setIsScanning(true);
-      setScannedData(null);
-    }
+    Alert.alert(
+      'QR Terdeteksi',
+      data,
+      [
+        {
+          text:'OK',
+          onPress:()=>
+            setIsScanning(true)
+        }
+      ]
+    );
   };
 
-  return (
+  if(!permission?.granted){
+
+    return(
+
+      <View style={styles.center}>
+
+        <Text style={styles.text}>
+          Kamera diperlukan
+        </Text>
+
+        <TouchableOpacity
+          style={styles.btn}
+          onPress={requestPermission}
+        >
+
+          <Text style={styles.btnText}>
+            Izinkan Kamera
+          </Text>
+
+        </TouchableOpacity>
+
+      </View>
+    );
+  }
+
+  if(locationStatus==='checking'){
+
+    return(
+
+      <View style={styles.center}>
+
+        <ActivityIndicator
+          size="large"
+          color="blue"
+        />
+
+        <Text style={styles.text}>
+          Mengambil GPS...
+        </Text>
+
+      </View>
+    );
+  }
+
+  if(locationStatus==='invalid'){
+
+    return(
+
+      <View style={styles.center}>
+
+        <MaterialIcons
+          name="block"
+          size={80}
+          color="red"
+        />
+
+        <Text style={styles.error}>
+          Akses Ditolak
+        </Text>
+
+        <Text style={styles.text}>
+          Jarak Anda:
+          {distance} meter
+        </Text>
+
+        <Text style={styles.text}>
+          Radius:
+          {MAKSIMAL_JARAK_METER}m
+        </Text>
+
+        <TouchableOpacity
+          style={styles.btn}
+          onPress={verifyLocation}
+        >
+
+          <Text style={styles.btnText}>
+            Refresh GPS
+          </Text>
+
+        </TouchableOpacity>
+
+      </View>
+    );
+  }
+
+  return(
+
     <View style={styles.container}>
+
       <CameraView
-        style={StyleSheet.absoluteFillObject}
+        style={
+          StyleSheet.absoluteFillObject
+        }
         facing="back"
-        onBarcodeScanned={isScanning ? handleBarCodeScanned : undefined}
-        barCodeScannerSettings={{ barCodeTypes: ["qr"] }}
+        barcodeScannerSettings={{
+          barcodeTypes:['qr']
+        }}
+        onBarcodeScanned={
+          isScanning
+            ? handleBarCodeScanned
+            : undefined
+        }
       />
 
       <View style={styles.overlay}>
-        <View style={styles.overlayTop} />
 
-        <View style={styles.overlayMiddle}>
-          <View style={styles.overlaySide} />
-          <View style={styles.scanBox}>
-            <View style={[styles.corner, styles.cornerTL]} />
-            <View style={[styles.corner, styles.cornerTR]} />
-            <View style={[styles.corner, styles.cornerBL]} />
-            <View style={[styles.corner, styles.cornerBR]} />
-          </View>
-          <View style={styles.overlaySide} />
+        <View style={styles.badge}>
+
+          <MaterialIcons
+            name="check-circle"
+            color="white"
+            size={24}
+          />
+
+          <Text style={styles.badgeText}>
+            Lokasi Valid ({distance}m)
+          </Text>
+
         </View>
 
-        <View style={styles.overlayBottom}>
-          <Text style={styles.scanText}>Arahkan kamera ke QR Code Dosen</Text>
-          {!isScanning && !isSubmitting && (
-            <TouchableOpacity
-              style={styles.scanButton}
-              onPress={() => setIsScanning(true)}
-            >
-              <Text style={styles.scanButtonText}>Scan Lagi</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+        <Text style={styles.scanText}>
+          Scan QR Dosen
+        </Text>
+
+        {!isScanning && (
+
+          <Button
+            title="Scan Lagi"
+            onPress={() =>
+              setIsScanning(true)
+            }
+          />
+
+        )}
+
       </View>
+
     </View>
   );
 }
 
-const BOX_SIZE = 250;
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: 'black',
+
+  container:{
+    flex:1,
+    backgroundColor:'black'
   },
-  infoText: {
-    color: 'white',
-    textAlign: 'center',
-    margin: 30,
-    fontSize: 16,
+
+  center:{
+    flex:1,
+    justifyContent:'center',
+    alignItems:'center',
+    padding:20
   },
-  buttonRequest: {
-    backgroundColor: '#0056b3',
-    padding: 15,
-    borderRadius: 10,
-    alignSelf: 'center',
+
+  overlay:{
+    flex:1,
+    justifyContent:'space-between',
+    padding:30,
+    backgroundColor:
+      'rgba(0,0,0,0.45)'
   },
-  buttonText: {
-    color: 'white',
-    fontWeight: 'bold',
+
+  badge:{
+    flexDirection:'row',
+    alignItems:'center',
+    backgroundColor:'green',
+    padding:12,
+    borderRadius:20
   },
-  overlay: {
-    flex: 1,
+
+  badgeText:{
+    color:'white',
+    marginLeft:8,
+    fontWeight:'bold'
   },
-  overlayTop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+
+  scanText:{
+    color:'white',
+    fontSize:22,
+    fontWeight:'bold',
+    textAlign:'center'
   },
-  overlayMiddle: {
-    flexDirection: 'row',
-    height: BOX_SIZE,
+
+  btn:{
+    backgroundColor:'#A06035',
+    padding:15,
+    borderRadius:10,
+    marginTop:20
   },
-  overlaySide: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+
+  btnText:{
+    color:'white',
+    fontWeight:'bold'
   },
-  scanBox: {
-    width: BOX_SIZE,
-    height: BOX_SIZE,
-    backgroundColor: 'transparent',
+
+  text:{
+    marginTop:10,
+    textAlign:'center'
   },
-  overlayBottom: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    alignItems: 'center',
-    paddingTop: 20,
-  },
-  scanText: {
-    color: 'white',
-    fontSize: 13,
-    fontWeight: 'bold',
-  },
-  scanButton: {
-    marginTop: 20,
-    backgroundColor: '#FF6107',
-    paddingHorizontal: 30,
-    paddingVertical: 12,
-    borderRadius: 25,
-  },
-  scanButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 15,
-  },
-  corner: {
-    position: 'absolute',
-    width: 40,
-    height: 40,
-    borderColor: '#0070ff',
-  },
-  cornerTL: {
-    top: 0, left: 0,
-    borderTopWidth: 5, borderLeftWidth: 5,
-  },
-  cornerTR: {
-    top: 0, right: 0,
-    borderTopWidth: 5, borderRightWidth: 5,
-  },
-  cornerBL: {
-    bottom: 0, left: 0,
-    borderBottomWidth: 5, borderLeftWidth: 5,
-  },
-  cornerBR: {
-    bottom: 0, right: 0,
-    borderBottomWidth: 5, borderRightWidth: 5,
-  },
+
+  error:{
+    color:'red',
+    fontSize:28,
+    fontWeight:'bold',
+    marginVertical:15
+  }
+
 });

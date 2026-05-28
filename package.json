@@ -31,6 +31,7 @@
     "@react-navigation/native-stack": "^7.14.11",
     "axios": "^1.16.0",
     "expo": "~54.0.33",
+    "expo-barcode-scanner": "^13.0.1",
     "expo-camera": "~17.0.10",
     "expo-location": "~19.0.8",
     "expo-status-bar": "~3.0.9",
@@ -45,5 +46,8 @@
     "react-native-vector-icons": "^10.3.0",
     "react-native-web": "^0.21.0"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "expo-module-scripts": "^56.0.2"
+  }
 }
